@@ -3,9 +3,11 @@ const cors = require('cors');
 const path = require('path');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const { OAuth2Client } = require('google-auth-library');
 const db = require('./db');
 
 const app = express();
+const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 app.use(cors());
 app.use(express.json());
 
@@ -22,11 +24,18 @@ const initDb = async () => {
         id int(11) NOT NULL AUTO_INCREMENT,
         name varchar(255) NOT NULL,
         email varchar(255) NOT NULL UNIQUE,
-        password varchar(255) NOT NULL,
+        password varchar(255) DEFAULT NULL,
         created_at timestamp NOT NULL DEFAULT current_timestamp(),
         PRIMARY KEY (id)
       )
     `);
+    
+    // Attempt to alter table if it was already created with NOT NULL
+    try {
+      await db.query('ALTER TABLE users MODIFY password varchar(255) DEFAULT NULL;');
+    } catch (e) {
+      // Ignore if table doesn't exist yet or column already correct
+    }
 
     await db.query(`
       CREATE TABLE IF NOT EXISTS orders (
@@ -102,6 +111,39 @@ app.post('/api/login', async (req, res) => {
     res.json({ token, message: 'Login berhasil' });
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/google-login', async (req, res) => {
+  const { credential } = req.body;
+  if (!credential) return res.status(400).json({ message: 'Token Google tidak ada' });
+
+  try {
+    const ticket = await googleClient.verifyIdToken({
+      idToken: credential,
+      audience: process.env.GOOGLE_CLIENT_ID,
+    });
+    const payload = ticket.getPayload();
+    const { email, name } = payload;
+
+    // Check if user exists
+    let [users] = await db.query('SELECT * FROM users WHERE email = ?', [email]);
+    let userId;
+
+    if (users.length === 0) {
+      // Register new user via Google
+      const [result] = await db.query('INSERT INTO users (name, email) VALUES (?, ?)', [name, email]);
+      userId = result.insertId;
+      await db.query('INSERT INTO settings (user_id, base_price, price_per_km, min_price, daily_expense, daily_target) VALUES (?, 5000.00, 2000.00, 10000.00, 20000.00, 100000.00)', [userId]);
+    } else {
+      userId = users[0].id;
+    }
+
+    const token = jwt.sign({ id: userId }, JWT_SECRET, { expiresIn: '30d' });
+    res.json({ token, message: 'Login Google berhasil' });
+  } catch (err) {
+    console.error('Google login error:', err);
+    res.status(401).json({ message: 'Autentikasi Google gagal', error: err.message });
   }
 });
 
