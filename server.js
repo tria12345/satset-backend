@@ -1,11 +1,15 @@
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
 const db = require('./db');
 
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+const JWT_SECRET = process.env.JWT_SECRET || 'rahasia_satset_super_aman';
 
 // Serve static frontend files
 app.use(express.static(path.join(__dirname, '../frontend/dist')));
@@ -14,35 +18,44 @@ app.use(express.static(path.join(__dirname, '../frontend/dist')));
 const initDb = async () => {
   try {
     await db.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        id int(11) NOT NULL AUTO_INCREMENT,
+        name varchar(255) NOT NULL,
+        email varchar(255) NOT NULL UNIQUE,
+        password varchar(255) NOT NULL,
+        created_at timestamp NOT NULL DEFAULT current_timestamp(),
+        PRIMARY KEY (id)
+      )
+    `);
+
+    await db.query(`
       CREATE TABLE IF NOT EXISTS orders (
         id int(11) NOT NULL AUTO_INCREMENT,
+        user_id int(11) NOT NULL,
         distance decimal(10,2) NOT NULL,
         price_charged decimal(10,2) NOT NULL,
         expenses decimal(10,2) NOT NULL DEFAULT 0.00,
         net_profit decimal(10,2) NOT NULL,
         notes text DEFAULT NULL,
         created_at timestamp NOT NULL DEFAULT current_timestamp(),
-        PRIMARY KEY (id)
+        PRIMARY KEY (id),
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
       )
     `);
     
     await db.query(`
       CREATE TABLE IF NOT EXISTS settings (
-        id int(11) NOT NULL,
+        user_id int(11) NOT NULL,
         base_price decimal(10,2) NOT NULL,
         price_per_km decimal(10,2) NOT NULL,
         min_price decimal(10,2) NOT NULL,
         daily_expense decimal(10,2) NOT NULL DEFAULT 0.00,
         daily_target decimal(10,2) NOT NULL DEFAULT 100000.00,
-        PRIMARY KEY (id)
+        PRIMARY KEY (user_id),
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
       )
     `);
 
-    // Insert default settings if empty
-    const [rows] = await db.query('SELECT * FROM settings WHERE id = 1');
-    if (rows.length === 0) {
-      await db.query('INSERT INTO settings (id, base_price, price_per_km, min_price, daily_expense, daily_target) VALUES (1, 5000.00, 2000.00, 10000.00, 20000.00, 100000.00)');
-    }
     console.log('Database tables initialized successfully');
   } catch (err) {
     console.error('Failed to initialize database:', err.message);
@@ -50,10 +63,67 @@ const initDb = async () => {
 };
 initDb();
 
-// Get settings
-app.get('/api/settings', async (req, res) => {
+// --- Auth Routes ---
+app.post('/api/register', async (req, res) => {
+  const { name, email, password } = req.body;
+  if (!name || !email || !password) return res.status(400).json({ message: 'Lengkapi semua data' });
+
   try {
-    const [rows] = await db.query('SELECT * FROM settings WHERE id = 1');
+    const [existing] = await db.query('SELECT * FROM users WHERE email = ?', [email]);
+    if (existing.length > 0) return res.status(400).json({ message: 'Email sudah terdaftar' });
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const [result] = await db.query('INSERT INTO users (name, email, password) VALUES (?, ?, ?)', [name, email, hashedPassword]);
+    const userId = result.insertId;
+
+    // Create default settings for new user
+    await db.query('INSERT INTO settings (user_id, base_price, price_per_km, min_price, daily_expense, daily_target) VALUES (?, 5000.00, 2000.00, 10000.00, 20000.00, 100000.00)', [userId]);
+
+    const token = jwt.sign({ id: userId }, JWT_SECRET, { expiresIn: '30d' });
+    res.status(201).json({ token, message: 'Registrasi berhasil' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/login', async (req, res) => {
+  const { email, password } = req.body;
+  if (!email || !password) return res.status(400).json({ message: 'Lengkapi email dan password' });
+
+  try {
+    const [users] = await db.query('SELECT * FROM users WHERE email = ?', [email]);
+    if (users.length === 0) return res.status(400).json({ message: 'Email tidak ditemukan' });
+
+    const user = users[0];
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (!isMatch) return res.status(400).json({ message: 'Password salah' });
+
+    const token = jwt.sign({ id: user.id }, JWT_SECRET, { expiresIn: '30d' });
+    res.json({ token, message: 'Login berhasil' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Middleware Auth
+const authenticateToken = (req, res, next) => {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+  if (!token) return res.status(401).json({ message: 'Akses ditolak. Token tidak ada' });
+
+  jwt.verify(token, JWT_SECRET, (err, user) => {
+    if (err) return res.status(403).json({ message: 'Token tidak valid' });
+    req.user = user;
+    next();
+  });
+};
+
+// --- Protected Routes ---
+
+// Get settings
+app.get('/api/settings', authenticateToken, async (req, res) => {
+  try {
+    const [rows] = await db.query('SELECT * FROM settings WHERE user_id = ?', [req.user.id]);
     if (rows.length > 0) {
       res.json(rows[0]);
     } else {
@@ -65,12 +135,12 @@ app.get('/api/settings', async (req, res) => {
 });
 
 // Update settings
-app.put('/api/settings', async (req, res) => {
+app.put('/api/settings', authenticateToken, async (req, res) => {
   const { base_price, price_per_km, min_price, daily_expense, daily_target } = req.body;
   try {
     await db.query(
-      'UPDATE settings SET base_price = ?, price_per_km = ?, min_price = ?, daily_expense = ?, daily_target = ? WHERE id = 1',
-      [base_price, price_per_km, min_price, daily_expense, daily_target]
+      'UPDATE settings SET base_price = ?, price_per_km = ?, min_price = ?, daily_expense = ?, daily_target = ? WHERE user_id = ?',
+      [base_price, price_per_km, min_price, daily_expense, daily_target, req.user.id]
     );
     res.json({ message: 'Settings updated successfully' });
   } catch (err) {
@@ -79,9 +149,9 @@ app.put('/api/settings', async (req, res) => {
 });
 
 // Get all orders
-app.get('/api/orders', async (req, res) => {
+app.get('/api/orders', authenticateToken, async (req, res) => {
   try {
-    const [orders] = await db.query('SELECT * FROM orders ORDER BY created_at DESC');
+    const [orders] = await db.query('SELECT * FROM orders WHERE user_id = ? ORDER BY created_at DESC', [req.user.id]);
     res.json({ orders });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -89,12 +159,12 @@ app.get('/api/orders', async (req, res) => {
 });
 
 // Create new order
-app.post('/api/orders', async (req, res) => {
+app.post('/api/orders', authenticateToken, async (req, res) => {
   const { distance, price_charged, expenses, net_profit, notes } = req.body;
   try {
     const [result] = await db.query(
-      'INSERT INTO orders (distance, price_charged, expenses, net_profit, notes) VALUES (?, ?, ?, ?, ?)',
-      [distance, price_charged, expenses, net_profit, notes]
+      'INSERT INTO orders (user_id, distance, price_charged, expenses, net_profit, notes) VALUES (?, ?, ?, ?, ?, ?)',
+      [req.user.id, distance, price_charged, expenses, net_profit, notes]
     );
     res.status(201).json({ id: result.insertId, message: 'Order created successfully' });
   } catch (err) {
