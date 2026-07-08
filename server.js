@@ -143,7 +143,7 @@ app.post('/api/google-login', async (req, res) => {
     res.json({ token, message: 'Login Google berhasil' });
   } catch (err) {
     console.error('Google login error:', err);
-    res.status(401).json({ message: 'Autentikasi Google gagal', error: err.message });
+    res.status(500).json({ message: `Google login error: ${err.message}` });
   }
 });
 
