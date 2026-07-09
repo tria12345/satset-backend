@@ -249,6 +249,27 @@ app.post('/api/orders', authenticateToken, async (req, res) => {
   }
 });
 
+// Delete specific order
+app.delete('/api/orders/:id', authenticateToken, async (req, res) => {
+  try {
+    const [result] = await db.query('DELETE FROM orders WHERE id = ? AND user_id = ?', [req.params.id, req.user.id]);
+    if (result.affectedRows === 0) return res.status(404).json({ message: 'Order not found' });
+    res.json({ message: 'Order deleted successfully' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Delete all orders
+app.delete('/api/orders', authenticateToken, async (req, res) => {
+  try {
+    await db.query('DELETE FROM orders WHERE user_id = ?', [req.user.id]);
+    res.json({ message: 'All orders deleted successfully' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 const PORT = process.env.PORT || 5000;
 if (process.env.NODE_ENV !== 'production') {
   app.listen(PORT, () => {
