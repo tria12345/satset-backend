@@ -215,12 +215,18 @@ app.get('/api/settings', authenticateToken, async (req, res) => {
 app.put('/api/settings', authenticateToken, async (req, res) => {
   const { base_price, price_per_km, min_price, daily_expense, daily_target } = req.body;
   try {
+    const bp = parseFloat(base_price) || 0;
+    const ppk = parseFloat(price_per_km) || 0;
+    const mp = parseFloat(min_price) || 0;
+    const de = parseFloat(daily_expense) || 0;
+    const dt = parseFloat(daily_target) || 0;
     await db.query(
       'UPDATE settings SET base_price = ?, price_per_km = ?, min_price = ?, daily_expense = ?, daily_target = ? WHERE user_id = ?',
-      [base_price, price_per_km, min_price, daily_expense, daily_target, req.user.id]
+      [bp, ppk, mp, de, dt, req.user.id]
     );
     res.json({ message: 'Settings updated successfully' });
   } catch (err) {
+    console.error('Settings update error:', err);
     res.status(500).json({ error: err.message });
   }
 });
