@@ -11,14 +11,30 @@ const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 app.use(cors());
 app.use(express.json());
 
-app.get('/api/debug-db', (req, res) => {
+app.get('/api/debug-db', async (req, res) => {
+  let initError = null;
+  try {
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        id int(11) NOT NULL AUTO_INCREMENT,
+        name varchar(255) NOT NULL,
+        email varchar(255) NOT NULL UNIQUE,
+        password varchar(255) DEFAULT NULL,
+        created_at timestamp NOT NULL DEFAULT current_timestamp(),
+        PRIMARY KEY (id)
+      )
+    `);
+  } catch (err) {
+    initError = err.message;
+  }
   res.json({
     dbHost: process.env.DB_HOST,
     dbPort: process.env.DB_PORT,
     dbUser: process.env.DB_USER,
     hasPassword: !!process.env.DB_PASSWORD,
     dbName: process.env.DB_NAME,
-    googleClient: !!process.env.GOOGLE_CLIENT_ID
+    googleClient: !!process.env.GOOGLE_CLIENT_ID,
+    initError
   });
 });
 
