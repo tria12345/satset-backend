@@ -11,6 +11,17 @@ const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 app.use(cors());
 app.use(express.json());
 
+app.get('/api/debug-db', (req, res) => {
+  res.json({
+    dbHost: process.env.DB_HOST,
+    dbPort: process.env.DB_PORT,
+    dbUser: process.env.DB_USER,
+    hasPassword: !!process.env.DB_PASSWORD,
+    dbName: process.env.DB_NAME,
+    googleClient: !!process.env.GOOGLE_CLIENT_ID
+  });
+});
+
 const JWT_SECRET = process.env.JWT_SECRET || 'rahasia_satset_super_aman';
 
 // Serve static frontend files
