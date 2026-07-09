@@ -81,7 +81,15 @@ const initDb = async () => {
     console.error('Failed to initialize database:', err.message);
   }
 };
-initDb();
+
+let dbInitialized = false;
+app.use(async (req, res, next) => {
+  if (!dbInitialized) {
+    await initDb();
+    dbInitialized = true;
+  }
+  next();
+});
 
 // --- Auth Routes ---
 app.post('/api/register', async (req, res) => {
